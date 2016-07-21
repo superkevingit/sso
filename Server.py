@@ -5,23 +5,27 @@ import redis
 import uuid
 import requests
 import ServerConfig
+import json
 
 app = Flask(__name__)
 
 r = redis.StrictRedis(host='localhost', port=6379, db=0, password=123)
-token_expires_time = ServerConfig.get('token_expires_time')
+token_expires = ServerConfig.get('token_expires')
 uc_expires = ServerConfig.get('uc_expires')
+uc_domain = ServerConfig.get('uc_domain')
+app_code = ServerConfig.get('app_code')
+
 
 # ############# Helper Function ####################
 def generateUuid(code_for):
     token = str(uuid.uuid3(uuid.uuid1(), str(code_for)).hex)
     return token
 
-# ############# Token/Session Manager ###############
+# ############# Token/GlobalSession Manager ###############
 class TokenUtil:
     def setToken(self, uc_token, TokenInfo):
         r.hmset(uc_token, TokenInfo)
-        return r.expire(uc_token, token_expires_time)
+        return r.expire(uc_token, token_expires)
 
     def getToken(self, uc_token):
         return r.hgetall(uc_token)
@@ -31,9 +35,37 @@ class TokenUtil:
 
 TokenUtil = TokenUtil()
 
-class GlobalSessions:
-    def sessions():
+class GlobalSessionUtil:
+    def setGlobalSession(self, ucsession, sessionid, app_code):
+        ucsession = 'sso:'+ucsession
+        sessionid = app_code+':'+'ucsession'
+        return r.lpush(ucsession, sessionid)
+
+    def getGlobalSessionNumber(self, ucsession):
+        ucsession = 'sso:'+ucsession
+        return r.llen(ucsession)
+
+    def delGlobalSession(self, ucsession):
+        ucsession = 'sso:'+ucsession
+        back_value = True
+        while back_value:
+            back_value = r.lpop(ucsession)
+            r.delete(str(back_value))
+        return True
+
+GlobalSessionUtil = GlobalSessionUtil()
+
+class LocalSessionUtil:
+    def setLocalSession(self, sessionid, info, host):
+        sessionid = host+':'+sessionid
+        r.hmset(sessionid, info)
+        return r.expire(sessionid, uc_expires)
+
+    def getLocalSession(self, sessionid):
         pass
+
+
+LocalSessionUtil = LocalSessionUtil()
 
 
 # ############# Web Router #########################
@@ -53,22 +85,59 @@ def login():
     elif request.form.get('view_token'):
         view_token = request.form.get('view_token')
     else:
-        view_token = None
+        view_token = url_for('token', _external=True)
 
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
+        # mysql select!
         if username and password:
             token = generateUuid('token')
-            TokenUtil.setToken(token, {'sessionid':'', 'username': username, 'app_tag': ''})
-            req = requests.get(view_token, params=token)
-            return req
-            if not req:
-                return {'msg':'token failed or expired!'}
-
+            sessionid = generateUuid('sessionid')
+            TokenUtil.setToken(token, {'sessionid':sessionid, 'username': username, 'app_code': ''})
+            # here is a request,need more time
+            req = requests.get(view_token, params={'token': token})
+            token_check = json.loads(req.text)['result']
+            if token_check:
+                #time delay(need something!)
+                ucsession = generateUuid('ucsession')
+                res = make_response()
+                res.set_cookie('ucsession', value=ucsession, domain=uc_domain, expires=uc_expires)
+                from_uc = json.loads(req.text)['from_uc']
+                if from_uc is False:
+                    app_code = TokenUtil.getToken(token)['app_code']
+                    GlobalSessionUtil.setGlobalSession(ucsession, sessionid, str(app_code))
+                    info = {'username': username, 'name': 'select from mysql!'}
+                    LocalSessionUtil.setLocalSession(sessionid, info, str(app_code))
+                    TokenUtil.delToken(token)
+                else:
+                    app_code = ServerConfig.get('app_code')
+                    GlobalSessionUtil.setGlobalSession(ucsession, sessionid, app_code)
+                    info = {'username': username, 'name': 'select from mysql!'}
+                    LocalSessionUtil.setLocalSession(sessionid, info, app_code)
+                    TokenUtil.delToken(token)
+                return redirect(view_before)
         return render_template('login.html', view_before=view_before, view_token=view_token)
     return render_template('login.html', view_before=view_before, view_token=view_token)
 
+# need fix!
+@app.route('/token', methods=['GET'])
+def token():
+    if request.args.get('token'):
+        token = request.args.get('token')
+        tkn = r.hgetall(token)
+        if tkn is not None:
+            sessionid = generateUuid('sessionid')
+            r.hmset(token, {'sessionid': sessionid, 'app_code': ClientConfig.get('app_code')})
+            res = make_response()
+            res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
+            return json.dumps({'result': True, 'msg': 'token permit'})
+        return json.dumps({'result': False, 'msg': 'token expires or illegal'})
+    return json.dumps({'result': False, 'msg': 'no token'})
+
+@app.route('/show_user')
+def show_user():
+    return 'I am show user'
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

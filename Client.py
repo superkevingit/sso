@@ -18,6 +18,7 @@ db=ClientConfig.get('redis_db')
 password=ClientConfig.get('redis_password')
 domain=ClientConfig.get('cli_cookie_domain')
 expires=int(time.time()) + ClientConfig.get('expires_time')
+app_code=ClientConfig.get('app_code')
 
 r = redis.StrictRedis(host=host, port=port, db=db, password=password)
 
@@ -54,11 +55,27 @@ def with_permission(func):
         return func(result)
     return _get_info
 
-# ############# Local Session Manager ########
+# ############# Token/Local Session Manager ########
+
+
+class TokenUtil:
+    def setToken(self, uc_token, TokenInfo):
+        uc_token = 'token:' + uc_token
+        return r.hmset(uc_token, TokenInfo)
+
+    def getToken(self, uc_token):
+        uc_token = 'token:' + uc_token
+        return r.hgetall(uc_token)
+
+TokenUtil = TokenUtil()
+
+
+class LocalSessionUtil:
+    def delLocalSession():
+        pass
+
 
 # ############# Web Router ###################
-
-
 # a page need permit
 @app.route('/page', methods=['GET'])
 @with_permission
@@ -70,7 +87,6 @@ def page(result):
 @app.route('/login', methods=['GET'])
 def login():
     view_before = request.args.get('view_before') if request.args.get('view_before') else url_for('login', _external=True)
-    print view_before
     payload = {'view_before': view_before, 'view_token': url_for('token', _external=True)}
     server_url = ClientConfig.get('server_url')
     r= requests.get(server_url, params=payload)
@@ -81,14 +97,15 @@ def login():
 def token():
     if request.args.get('token'):
         token = request.args.get('token')
-        tkn = r.hexists(token)
-        if tkn:
-            sessionid = generateUuid('sessionid')
-            r.hmset(token, {'sessionid': sessionid, 'app_code': ClientConfig.get('app_code')})
+        tkn = TokenUtil.getToken(token)
+        if tkn is not None:
+            TokenUtil.setToken(token, {'app_code': app_code})
+            sessionid = tkn['sessionid']
             res = make_response()
             res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
-            return json.dumps({'result': True})
-    return json.dumps({'result': False})
+            return json.dumps({'result': True, 'msg': 'token permit', 'from_uc': False})
+        return json.dumps({'result': False, 'msg': 'token expires or illegal'})
+    return json.dumps({'result': False, 'msg': 'no token'})
 
 
 @app.route('/')
