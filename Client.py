@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
-from flask import Flask, redirect, url_for, request, make_response
+from flask import Flask, redirect, url_for, request, make_response, render_template
 import uuid
 import redis
 import time
@@ -8,6 +8,7 @@ import os
 from functools import wraps
 import ClientConfig
 import requests
+import json
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -27,77 +28,70 @@ def generateUuid(code_for):
 
 
 # ############# Helper Function ##############
-
-def get_cli_sessionid(request):
+def get_sessionid(request):
     sessionid = False
     if request.cookies.get('sessionid'):
         sessionid = request.cookies.get('sessionid')
     return sessionid
 
 
-def set_cli_sessionid(func):
-    @wraps(func)
-    def _set_cli_sessionid(**args):
-        session_id = get_cli_sessionid(request)
-        if session_id:
-            return session_id
-        sessionid = generateUuid('sessionid')
-        res = make_response(url_for(str(func.__name__)))
-        res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
-        return func(res, **args)
-    return _set_cli_sessionid
-
-
 def get_info(sessionid):
-    u_tag = r.hgetall(sessionid)
-    if u_tag:
-        return u_tag
+    u = r.hgetall(sessionid)
+    if u:
+        return u
     return False
 
 
 def with_permission(func):
     @wraps(func)
-    def _get_info(**args):
-        info = get_info(get_cli_sessionid(request))
+    def _get_info():
+        info = get_info(get_sessionid(request))
         if not info:
-            fuc_name = func.__name__
-            return redirect(url_for('login', _external=True) + '?view_before=' + str(fuc_name))
-#        info = json.dumps(info)
-        return func(info, **args)
+            view_before = str(func.__name__)
+            r =requests.get(url_for('login', _external=True), params={'view_before': view_before})
+            return r.url
+        return func(info)
     return _get_info
 
-# ############# Session Manager ########
+# ############# Local Session Manager ########
 
 # ############# Web Router ###################
 
 
+# a page need permit
+@app.route('/page', methods=['GET'])
+@with_permission
+def page(info):
+    return render_template('page.html', info=info)
+
+
 @app.route('/login', methods=['GET'])
 def login():
-    view_before = request.args.get('view_before')
-    payload = {'view_before': url_for(view_before, _external=True), 'expires': expires, 'app_code': ClientConfig.get('app_code')}
+    view_before = request.args.get('view_before') if request.args.get('view_before') else url_for('login', _external=True)
+    print view_before
+    payload = {'view_before': view_before, 'view_token': url_for('token', _external=True)}
     server_url = ClientConfig.get('server_url')
     r= requests.get(server_url, params=payload)
     return redirect(r.url)
 
 
-@app.route('/token/<token>', methods=['GET'])
+@app.route('/token', methods=['GET'])
 def token():
-    r.hgetall(token)
+    if request.args.get('token'):
+        token = request.args.get('token')
+        tkn = r.hexists(token)
+        if tkn:
+            sessionid = generateUuid('sessionid')
+            r.hmset(token, {'sessionid': sessionid, 'app_code': ClientConfig.get('app_code')})
+            res = make_response()
+            res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
+            return json.dumps({'result': True})
+    return json.dumps({'result': False})
 
 
 @app.route('/')
 def index():
     return 'I am sso-client'
-
-
-# a page need permit
-@app.route('/page')
-@with_permission
-def page(info):
-    if request.cookies.get('sessionid'):
-        sessionid = request.cookies.get('sessionid')
-        return sessionid
-    return redirect(url_for('login'))
 
 
 if __name__ == '__main__':
