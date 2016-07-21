@@ -46,11 +46,12 @@ def with_permission(func):
     @wraps(func)
     def _get_info():
         info = get_info(get_sessionid(request))
-        if not info:
-            view_before = str(func.__name__)
-            r =requests.get(url_for('login', _external=True), params={'view_before': view_before})
-            return r.url
-        return func(info)
+        if info is False:
+            view_before = url_for(str(func.__name__), _external=True)
+            return redirect(url_for('login', view_before=view_before))
+        result = {'msg': True, 'info': info}
+        result = json.dumps(result)
+        return func(result)
     return _get_info
 
 # ############# Local Session Manager ########
@@ -61,8 +62,9 @@ def with_permission(func):
 # a page need permit
 @app.route('/page', methods=['GET'])
 @with_permission
-def page(info):
-    return render_template('page.html', info=info)
+def page(result):
+    result = json.loads(result)
+    return render_template('page.html', info=result['info'])
 
 
 @app.route('/login', methods=['GET'])
