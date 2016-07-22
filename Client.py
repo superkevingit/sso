@@ -55,9 +55,8 @@ def with_permission(func):
         return func(result)
     return _get_info
 
+
 # ############# Token/Local Session Manager ########
-
-
 class TokenUtil:
     def setToken(self, uc_token, TokenInfo):
         uc_token = 'token:' + uc_token
@@ -94,6 +93,7 @@ def login():
 
 
 @app.route('/token', methods=['GET'])
+@app.before_request
 def token():
     if request.args.get('token'):
         token = request.args.get('token')
@@ -101,11 +101,20 @@ def token():
         if tkn is not None:
             TokenUtil.setToken(token, {'app_code': app_code})
             sessionid = tkn['sessionid']
-            res = make_response()
-            res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
-            return json.dumps({'result': True, 'msg': 'token permit', 'from_uc': False})
+            @after_this_request
+            def set_sessionid(response):
+                response.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
+#            return json.dumps({'result': True, 'msg': 'token permit'})
         return json.dumps({'result': False, 'msg': 'token expires or illegal'})
     return json.dumps({'result': False, 'msg': 'no token'})
+
+
+@app.route('/cook')
+def cook():
+    resp = make_response(redirect('http://0.0.0.0:5000/show_user'))
+    value = generateUuid('cookietest')
+    resp.set_cookie('cookietest', value=value, domain=domain, expires=expires)
+    return 'hello'
 
 
 @app.route('/')

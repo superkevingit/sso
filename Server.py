@@ -21,32 +21,37 @@ def generateUuid(code_for):
     token = str(uuid.uuid3(uuid.uuid1(), str(code_for)).hex)
     return token
 
+
 # ############# Token/GlobalSession Manager ###############
 class TokenUtil:
     def setToken(self, uc_token, TokenInfo):
+        uc_token = 'token:' + uc_token
         r.hmset(uc_token, TokenInfo)
         return r.expire(uc_token, token_expires)
 
     def getToken(self, uc_token):
+        uc_token = 'token:' + uc_token
         return r.hgetall(uc_token)
 
     def delToken(self, uc_token):
+        uc_token = 'token:' + uc_token
         return r.delete(uc_token)
 
 TokenUtil = TokenUtil()
 
+
 class GlobalSessionUtil:
     def setGlobalSession(self, ucsession, sessionid, app_code):
-        ucsession = 'sso:'+ucsession
-        sessionid = app_code+':'+'ucsession'
+        ucsession = 'sso:' + ucsession
+        sessionid = 'sessionid:' + app_code + ':' + sessionid
         return r.lpush(ucsession, sessionid)
 
     def getGlobalSessionNumber(self, ucsession):
-        ucsession = 'sso:'+ucsession
+        ucsession = 'sso:' + ucsession
         return r.llen(ucsession)
 
     def delGlobalSession(self, ucsession):
-        ucsession = 'sso:'+ucsession
+        ucsession = 'sso:' + ucsession
         back_value = True
         while back_value:
             back_value = r.lpop(ucsession)
@@ -55,13 +60,15 @@ class GlobalSessionUtil:
 
 GlobalSessionUtil = GlobalSessionUtil()
 
+
 class LocalSessionUtil:
-    def setLocalSession(self, sessionid, info, host):
-        sessionid = host+':'+sessionid
+    def setLocalSession(self, sessionid, info, app_code):
+        sessionid = 'sessionid:' + app_code + ':' + sessionid
         r.hmset(sessionid, info)
-        return r.expire(sessionid, uc_expires)
+        return r
 
     def getLocalSession(self, sessionid):
+        sessionid = 'sessionid:' + app_code + ':' + sessionid
         pass
 
 
@@ -69,8 +76,6 @@ LocalSessionUtil = LocalSessionUtil()
 
 
 # ############# Web Router #########################
-
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.args.get('view_before'):
@@ -94,31 +99,24 @@ def login():
         if username and password:
             token = generateUuid('token')
             sessionid = generateUuid('sessionid')
-            TokenUtil.setToken(token, {'sessionid':sessionid, 'username': username, 'app_code': ''})
+            TokenUtil.setToken(token, {'sessionid': sessionid, 'username': username, 'app_code': ''})
             # here is a request,need more time
             req = requests.get(view_token, params={'token': token})
             token_check = json.loads(req.text)['result']
             if token_check:
-                #time delay(need something!)
+                # time delay(need something!)
                 ucsession = generateUuid('ucsession')
                 res = make_response()
                 res.set_cookie('ucsession', value=ucsession, domain=uc_domain, expires=uc_expires)
-                from_uc = json.loads(req.text)['from_uc']
-                if from_uc is False:
-                    app_code = TokenUtil.getToken(token)['app_code']
-                    GlobalSessionUtil.setGlobalSession(ucsession, sessionid, str(app_code))
-                    info = {'username': username, 'name': 'select from mysql!'}
-                    LocalSessionUtil.setLocalSession(sessionid, info, str(app_code))
-                    TokenUtil.delToken(token)
-                else:
-                    app_code = ServerConfig.get('app_code')
-                    GlobalSessionUtil.setGlobalSession(ucsession, sessionid, app_code)
-                    info = {'username': username, 'name': 'select from mysql!'}
-                    LocalSessionUtil.setLocalSession(sessionid, info, app_code)
-                    TokenUtil.delToken(token)
+                app_code = TokenUtil.getToken(token)['app_code']
+                GlobalSessionUtil.setGlobalSession(ucsession, sessionid, str(app_code))
+                info = {'username': username, 'name': 'select from mysql!'}
+                LocalSessionUtil.setLocalSession(sessionid, info, str(app_code))
+                TokenUtil.delToken(token)
                 return redirect(view_before)
         return render_template('login.html', view_before=view_before, view_token=view_token)
     return render_template('login.html', view_before=view_before, view_token=view_token)
+
 
 # need fix!
 @app.route('/token', methods=['GET'])
@@ -128,13 +126,16 @@ def token():
         tkn = r.hgetall(token)
         if tkn is not None:
             sessionid = generateUuid('sessionid')
-            r.hmset(token, {'sessionid': sessionid, 'app_code': ClientConfig.get('app_code')})
+            print sessionid
+            r.hmset(token, {'sessionid': sessionid, 'app_code': ServerConfig.get('app_code')})
             res = make_response()
-            res.set_cookie('sessionid', value=sessionid, domain=domain, expires=expires)
-            return json.dumps({'result': True, 'msg': 'token permit'})
+            res.set_cookie('sessionid', value=sessionid, domain=uc_domain, expires=uc_expires)
+            return (res, json.dumps({'result': True, 'msg': 'token permit'}))
         return json.dumps({'result': False, 'msg': 'token expires or illegal'})
     return json.dumps({'result': False, 'msg': 'no token'})
 
+
+# need a decorator
 @app.route('/show_user')
 def show_user():
     return 'I am show user'
